@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# listing: compare satis.json with the module repositories that are public on GitHub.
+#
+# Silent when they agree. Names a public module the repository does not carry, and
+# a listed one that is no longer public, which stops the build.
+#
+# Usage:
+#     bin/listing
+#
+# Environment:
+#     OWNER           the GitHub account the modules live under (default: kingletas)
+#     MODULE_PATTERN  which repositories count as modules (default: ^magento2-module-)
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OWNER="${OWNER:-kingletas}"
+MODULE_PATTERN="${MODULE_PATTERN:-^magento2-module-}"
+
+public="$(
+	gh repo list "${OWNER}" --visibility public --no-archived --source --limit 1000 --json name --jq '.[].name' \
+		| grep -E "${MODULE_PATTERN}" | sort
+)"
+listed="$(
+	jq -r '.repositories[].url' "${ROOT}/satis.json" \
+		| sed -E "s#^https://github.com/${OWNER}/##; s#\.git\$##" | sort
+)"
+
+unlisted="$(comm -23 <(printf '%s\n' "${public}") <(printf '%s\n' "${listed}") | sed '/^$/d')"
+gone="$(comm -13 <(printf '%s\n' "${public}") <(printf '%s\n' "${listed}") | sed '/^$/d')"
+
+status=0
+if [ -n "${unlisted}" ]; then
+	echo "listing: public on GitHub but not in satis.json, so nobody can install them from here:" >&2
+	while IFS= read -r repository; do echo "    ${repository}" >&2; done <<<"${unlisted}"
+	status=1
+fi
+if [ -n "${gone}" ]; then
+	echo "listing: in satis.json but not a public repository, so the build refuses to run:" >&2
+	while IFS= read -r repository; do echo "    ${repository}" >&2; done <<<"${gone}"
+	status=1
+fi
+exit "${status}"

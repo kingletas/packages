@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+#
+# check: prove every release in local.d/site installs, the way a store would ask for it.
+#
+# Each release is resolved by Composer in an empty project against the built
+# repository. magento/* packages are stood in for by empty stubs, because the real
+# ones need repo.magento.com credentials that nobody cloning this has.
+#
+# Usage:
+#     bin/check
+#
+# Environment:
+#     COMPOSER_IMAGE  the Composer container image, pinned by digest
+#     PHP_FLOOR       the PHP version resolution assumes (default 8.4.0)
+
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+COMPOSER_IMAGE="${COMPOSER_IMAGE:?COMPOSER_IMAGE is not set; run this through make check}"
+PHP_FLOOR="${PHP_FLOOR:-8.4.0}"
+SITE="${ROOT}/local.d/site"
+WORK="${ROOT}/local.d/check"
+
+if [ ! -f "${SITE}/packages.json" ]; then
+	echo "check: nothing built yet; run make build first" >&2
+	exit 2
+fi
+
+rm -rf "${WORK}"
+mkdir -p "${WORK}/serve" "${WORK}/cache"
+
+# The metadata links are absolute paths, so the site is served under the same path it was built for.
+base_path="$(jq -r '."metadata-url"' "${SITE}/packages.json" | sed 's#/p2/%package%.json$##')"
+if [ -n "${base_path}" ]; then
+	mkdir -p "$(dirname "${WORK}/serve${base_path}")"
+	ln -s "${SITE}" "${WORK}/serve${base_path}"
+else
+	rmdir "${WORK}/serve"
+	ln -s "${SITE}" "${WORK}/serve"
+fi
+
+port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+python3 -m http.server --bind 127.0.0.1 --directory "${WORK}/serve" "${port}" >"${WORK}/server.log" 2>&1 &
+server=$!
+trap 'kill "${server}" 2>/dev/null' EXIT
+for _ in $(seq 50); do
+	curl -fsS -o /dev/null "http://127.0.0.1:${port}${base_path}/packages.json" 2>/dev/null && break
+	sleep 0.1
+done
+
+# Every release outside ~dev, as "name version". Minified metadata names a package only once, so the key is read.
+mapfile -t releases < <(
+	find "${SITE}/p2" -name '*.json' ! -name '*~dev.json' -print0 \
+		| xargs -0 jq -r '.packages | to_entries[] | "\(.key) \(.value[].version)"' \
+		| sort -u
+)
+if [ ${#releases[@]} -eq 0 ]; then
+	echo "check: the built repository holds no releases" >&2
+	exit 1
+fi
+
+stubs="$(
+	find "${SITE}/p2" -name '*.json' ! -name '*~dev.json' -print0 \
+		| xargs -0 jq -r '.packages[] | .[] | (.require // {}) | keys[] | select(startswith("magento/"))' \
+		| sort -u \
+		| jq -R '{type: "package", package: {name: ., version: "999.0.0", type: "metapackage"}}' \
+		| jq -s .
+)"
+
+failed=0
+for release in "${releases[@]}"; do
+	name="${release% *}"
+	version="${release#* }"
+	project="${WORK}/projects/${name//\//-}-${version}"
+	mkdir -p "${project}"
+	jq -n \
+		--arg url "http://127.0.0.1:${port}${base_path}" \
+		--arg name "${name}" --arg version "${version}" --arg php "${PHP_FLOOR}" \
+		--argjson stubs "${stubs}" \
+		'{
+			name: "check/install", type: "project", "minimum-stability": "stable",
+			repositories: ([{type: "composer", url: $url}] + $stubs),
+			require: {($name): $version},
+			config: {"secure-http": false, platform: {php: $php}}
+		}' > "${project}/composer.json"
+
+	if ! docker run --rm --network host \
+		--user "$(id -u):$(id -g)" \
+		--env COMPOSER_HOME=/tmp/composer --env COMPOSER_CACHE_DIR=/cache \
+		--volume "${project}:/app" --volume "${WORK}/cache:/cache" \
+		--workdir /app \
+		"${COMPOSER_IMAGE}" composer update --no-install --no-plugins --no-scripts --no-interaction --no-progress \
+		> "${project}/composer.log" 2>&1; then
+		echo "FAIL ${name} ${version} does not install:" >&2
+		sed 's/^/    /' "${project}/composer.log" >&2
+		failed=$((failed + 1))
+	fi
+done
+
+if [ "${failed}" -gt 0 ]; then
+	echo "check: ${failed} of ${#releases[@]} releases do not install" >&2
+	exit 1
+fi
+echo "check: all ${#releases[@]} releases install"

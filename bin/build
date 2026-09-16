@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# build: turn satis.json into a static Composer repository in local.d/site.
+#
+# Usage:
+#     bin/build
+#
+# Environment:
+#     REPOSITORY_URL  the address the site is served from (default: the homepage in satis.json)
+#     SATIS_IMAGE     the Satis container image, pinned by digest
+#     GITHUB_TOKEN    raises GitHub's API limit from 60 to 5,000 requests an hour
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SATIS_IMAGE="${SATIS_IMAGE:?SATIS_IMAGE is not set; run this through make build}"
+SITE="${ROOT}/local.d/site"
+WORK="${ROOT}/local.d/build"
+
+REPOSITORY_URL="${REPOSITORY_URL:-$(jq -r .homepage "${ROOT}/satis.json")}"
+REPOSITORY_URL="${REPOSITORY_URL%/}"
+if [[ ! "${REPOSITORY_URL}" =~ ^https?://[^/]+(/[A-Za-z0-9._~/-]*)?$ ]]; then
+	echo "build: REPOSITORY_URL is not a plain http(s) address: ${REPOSITORY_URL}" >&2
+	exit 2
+fi
+
+if [ -z "${GITHUB_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
+	GITHUB_TOKEN="$(gh auth token 2>/dev/null || true)"
+fi
+if [ -z "${GITHUB_TOKEN:-}" ]; then
+	echo "build: no GITHUB_TOKEN, so GitHub allows 60 API requests an hour and a large build can be refused" >&2
+	COMPOSER_AUTH='{}'
+else
+	COMPOSER_AUTH="$(jq -cn --arg t "${GITHUB_TOKEN}" '{"github-oauth": {"github.com": $t}}')"
+fi
+export COMPOSER_AUTH
+
+# A token that can read private repositories would publish them, so each one must answer with no git config and no credentials.
+refused=0
+while IFS= read -r url; do
+	if ! GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+		git -C / -c credential.helper= ls-remote --heads "${url}" >/dev/null 2>&1; then
+		echo "build: ${url} cannot be read anonymously; a private repository is never published here" >&2
+		refused=$((refused + 1))
+	fi
+done < <(jq -r '.repositories[].url' "${ROOT}/satis.json")
+if [ "${refused}" -gt 0 ]; then
+	exit 1
+fi
+
+rm -rf "${SITE}" "${WORK}"
+mkdir -p "${SITE}" "${WORK}/composer"
+jq --arg url "${REPOSITORY_URL}" '.homepage = $url' "${ROOT}/satis.json" > "${WORK}/satis.json"
+
+# COMPOSER_AUTH is passed by name so the token never appears in the process list.
+docker run --rm \
+	--user "$(id -u):$(id -g)" \
+	--env COMPOSER_AUTH \
+	--env COMPOSER_HOME=/work/composer \
+	--volume "${WORK}:/work" \
+	--volume "${SITE}:/site" \
+	"${SATIS_IMAGE}" build --no-interaction --quiet --minify /work/satis.json /site
+
+packages="$(jq -r '."available-packages" | length' "${SITE}/packages.json")"
+wanted="$(jq -r '.require | length' "${ROOT}/satis.json")"
+if [ "${packages}" != "${wanted}" ]; then
+	echo "build: satis.json asks for ${wanted} packages and the build holds ${packages}" >&2
+	echo "build: a repository that is private, renamed or has no release above its floor is skipped silently by Satis" >&2
+	exit 1
+fi

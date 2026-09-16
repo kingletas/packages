@@ -1,0 +1,47 @@
+{
+    "name": "kingletas/packages",
+    "description": "Composer repository for the Kingletas Magento 2 modules",
+    "homepage": "https://kingletas.github.io/packages",
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/kingletas/magento2-module-logger"
+        },
+        {
+            "type": "vcs",
+            "url": "https://github.com/kingletas/magento2-module-foundation"
+        },
+        {
+            "type": "vcs",
+            "url": "https://github.com/kingletas/magento2-module-process-guard"
+        },
+        {
+            "type": "vcs",
+            "url": "https://github.com/kingletas/magento2-module-catalog-access"
+        },
+        {
+            "type": "vcs",
+            "url": "https://github.com/kingletas/magento2-module-promotion-access"
+        },
+        {
+            "type": "vcs",
+            "url": "https://github.com/kingletas/magento2-module-cache-vary"
+        },
+        {
+            "type": "vcs",
+            "url": "https://github.com/kingletas/magento2-module-section-policy"
+        }
+    ],
+    "require": {
+        "kingletas/module-logger": ">=3.0",
+        "kingletas/module-foundation": ">=2.0",
+        "kingletas/module-process-guard": ">=2.0",
+        "kingletas/module-catalog-access": ">=2.0",
+        "kingletas/module-promotion-access": ">=2.0",
+        "kingletas/module-cache-vary": ">=2.0",
+        "kingletas/module-section-policy": ">=2.0"
+    },
+    "minimum-stability": "stable",
+    "require-dependencies": false,
+    "require-dev-dependencies": false
+}
