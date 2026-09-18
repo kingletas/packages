@@ -30,6 +30,14 @@
         {
             "type": "vcs",
             "url": "https://github.com/kingletas/magento2-module-section-policy"
+        },
+        {
+            "type": "vcs",
+            "url": "https://github.com/kingletas/magento2-module-catalog-index"
+        },
+        {
+            "type": "vcs",
+            "url": "https://github.com/kingletas/magento2-module-catalog-batch"
         }
     ],
     "require": {
@@ -39,7 +47,9 @@
         "kingletas/module-catalog-access": ">=2.0",
         "kingletas/module-promotion-access": ">=2.0",
         "kingletas/module-cache-vary": ">=2.0",
-        "kingletas/module-section-policy": ">=2.0"
+        "kingletas/module-section-policy": ">=2.0",
+        "kingletas/module-catalog-index": ">=1.0",
+        "kingletas/module-catalog-batch": ">=1.0"
     },
     "minimum-stability": "stable",
     "require-dependencies": false,
